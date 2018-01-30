@@ -177,7 +177,7 @@ public class ConcurrentCache {
                 try {
                     cacheEntry.lookupData.get().close();
                 } catch (IOException e) {
-                    log.error("Could not close LookupData for path {}", path);
+                    log.error("Could not close LookupData for path {}", path, e);
                 } catch (Exception e) {
                     log.error("Unexpected exception while closing {}", path);
                 } finally {

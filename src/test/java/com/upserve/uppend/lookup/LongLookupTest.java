@@ -191,7 +191,7 @@ public class LongLookupTest {
     @Test
     public void testPutIfNotExisting() {
 
-        int PUT_COUNT = 10_000_000;
+        int PUT_COUNT = 3_000_000;
 
         LongLookup longLookup = new LongLookup(path, 32, 64);
 
@@ -208,5 +208,7 @@ public class LongLookupTest {
                     longLookup.putIfNotExists(s.substring(0,1), s, supplier);
                 });
         assertEquals(PUT_COUNT, counter.get());
+
+        longLookup.close();
     }
 }
