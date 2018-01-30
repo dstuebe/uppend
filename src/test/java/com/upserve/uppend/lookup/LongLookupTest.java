@@ -3,12 +3,16 @@ package com.upserve.uppend.lookup;
 import com.google.common.collect.*;
 import com.google.common.hash.HashCode;
 import com.upserve.uppend.util.SafeDeleting;
+import net.bytebuddy.utility.RandomString;
 import org.junit.*;
 
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.*;
 import java.util.stream.*;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.*;
 
 import static org.junit.Assert.*;
 
@@ -182,5 +186,27 @@ public class LongLookupTest {
         longLookup.scan("c", (k, v) -> { throw new IllegalStateException("should not have been called"); });
 
         longLookup.close();
+    }
+
+    @Test
+    public void testPutIfNotExisting() {
+
+        int PUT_COUNT = 10_000_000;
+
+        LongLookup longLookup = new LongLookup(path, 32, 64);
+
+        AtomicInteger counter = new AtomicInteger();
+        LongSupplier supplier = () -> {
+            counter.getAndAdd(1);
+            return ThreadLocalRandom.current().nextLong();
+        };
+
+        IntStream.range(0,PUT_COUNT)
+                .parallel()
+                .forEach(i ->{
+                    String s = RandomString.make(8);
+                    longLookup.putIfNotExists(s.substring(0,1), s, supplier);
+                });
+        assertEquals(PUT_COUNT, counter.get());
     }
 }
