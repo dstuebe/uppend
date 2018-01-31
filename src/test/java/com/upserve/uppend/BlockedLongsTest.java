@@ -213,4 +213,29 @@ public class BlockedLongsTest {
                     block.values(entry.getKey()).sorted().toArray());
         });
     }
+
+    @Test
+    public void readRecovery() {
+
+        BlockedLongs block = new BlockedLongs(path, 3);
+
+        long pos = block.allocate();
+
+        block.append(pos, 1L);
+        block.append(pos, 1L);
+        block.append(pos, 1L);
+
+        long newPos = block.allocate();
+
+        block.writeLong(newPos, 1);
+        block.writeLong(newPos + 8, pos);
+        block.writeLong(newPos + 16, 2L);
+        // link to last->next
+        block.writeLong(pos, -newPos);
+
+        block.append(pos, 2L);
+        assertArrayEquals(new long[] {1L, 1L, 1L, 2L, 2L}, block.values(pos).toArray());
+    }
+
+
 }

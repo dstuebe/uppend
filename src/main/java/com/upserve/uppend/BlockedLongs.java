@@ -142,6 +142,7 @@ public class BlockedLongs implements AutoCloseable, Flushable {
         log.trace("allocating block of {} bytes in {}", blockSize, file);
         allocCount.getAndAdd(1);
         long pos = posMem.getAndAdd(blockSize);
+        posBuf.putLong(pos);
         return pos;
     }
 
@@ -167,11 +168,16 @@ public class BlockedLongs implements AutoCloseable, Flushable {
             if (prev > 0) {
                 throw new IllegalStateException("append called at non-starting block: pos=" + pos + " in path: " + file);
             }
-            final long last = prev == 0 ? pos : -prev;
-            final long size = readLong(last);
+            long last = prev == 0 ? pos : -prev;
+            long size = readLong(last);
             if (size < 0) {
-                throw new IllegalStateException("last block has a next: pos=" + pos + " in path: " + file);
+                log.debug("Read Repair for last block with a next: pos=" + pos + " in path: " + file);
+                // The the new position was set and this block is full, but the last was never updated
+                last = -size;
+                size = readLong(last);
+                writeLong(pos + 8, -last);
             }
+
             if (size > valuesPerBlock) {
                 throw new IllegalStateException("too high num values: expected <= " + valuesPerBlock + ", got " + size + ": pos=" + pos + " in path: " + file);
             }
@@ -347,7 +353,7 @@ public class BlockedLongs implements AutoCloseable, Flushable {
         return page(pos).getLong(pagePos);
     }
 
-    private void writeLong(long pos, long val) {
+    protected void writeLong(long pos, long val) {
         int pagePos = (int) (pos % (long) PAGE_SIZE);
         page(pos).putLong(pagePos, val);
     }
