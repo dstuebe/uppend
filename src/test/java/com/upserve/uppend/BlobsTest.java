@@ -8,6 +8,7 @@ import java.lang.reflect.*;
 import java.nio.*;
 import java.nio.channels.*;
 import java.nio.file.Paths;
+import java.util.concurrent.Future;
 
 import static org.junit.Assert.assertEquals;
 
@@ -23,7 +24,7 @@ public class BlobsTest {
 
     @After
     public void uninitialize() throws IOException {
-        blobs.close();
+        if (blobs != null) blobs.close();
         SafeDeleting.removeDirectory(Paths.get("build/test/blobs"));
     }
 
@@ -61,93 +62,69 @@ public class BlobsTest {
 
     @Test(expected = UncheckedIOException.class)
     public void testCloseException() throws Exception {
-        resetFinal(blobs, "blobs", new FileChannel() {
-            @Override
-            public int read(ByteBuffer dst) throws IOException {
-                return 0;
-            }
+        resetFinal(blobs, "blobs", new AsynchronousFileChannel() {
+                    @Override
+                    public long size() throws IOException {
+                        return 0;
+                    }
 
-            @Override
-            public long read(ByteBuffer[] dsts, int offset, int length) throws IOException {
-                return 0;
-            }
+                    @Override
+                    public AsynchronousFileChannel truncate(long size) throws IOException {
+                        return null;
+                    }
 
-            @Override
-            public int write(ByteBuffer src) throws IOException {
-                return 0;
-            }
+                    @Override
+                    public void force(boolean metaData) throws IOException {
 
-            @Override
-            public long write(ByteBuffer[] srcs, int offset, int length) throws IOException {
-                return 0;
-            }
+                    }
 
-            @Override
-            public long position() throws IOException {
-                return 0;
-            }
+                    @Override
+                    public <A> void lock(long position, long size, boolean shared, A attachment, CompletionHandler<FileLock, ? super A> handler) {
 
-            @Override
-            public FileChannel position(long newPosition) throws IOException {
-                return null;
-            }
+                    }
 
-            @Override
-            public long size() throws IOException {
-                return 0;
-            }
+                    @Override
+                    public Future<FileLock> lock(long position, long size, boolean shared) {
+                        return null;
+                    }
 
-            @Override
-            public FileChannel truncate(long size) throws IOException {
-                return null;
-            }
+                    @Override
+                    public FileLock tryLock(long position, long size, boolean shared) throws IOException {
+                        return null;
+                    }
 
-            @Override
-            public void force(boolean metaData) throws IOException {
+                    @Override
+                    public <A> void read(ByteBuffer dst, long position, A attachment, CompletionHandler<Integer, ? super A> handler) {
 
-            }
+                    }
 
-            @Override
-            public long transferTo(long position, long count, WritableByteChannel target) throws IOException {
-                return 0;
-            }
+                    @Override
+                    public Future<Integer> read(ByteBuffer dst, long position) {
+                        return null;
+                    }
 
-            @Override
-            public long transferFrom(ReadableByteChannel src, long position, long count) throws IOException {
-                return 0;
-            }
+                    @Override
+                    public <A> void write(ByteBuffer src, long position, A attachment, CompletionHandler<Integer, ? super A> handler) {
 
-            @Override
-            public int read(ByteBuffer dst, long position) throws IOException {
-                return 0;
-            }
+                    }
 
-            @Override
-            public int write(ByteBuffer src, long position) throws IOException {
-                return 0;
-            }
+                    @Override
+                    public Future<Integer> write(ByteBuffer src, long position) {
+                        return null;
+                    }
 
-            @Override
-            public MappedByteBuffer map(MapMode mode, long position, long size) throws IOException {
-                return null;
-            }
+                    @Override
+                    public void close() throws IOException {
+                        throw new IOException("expected");
+                    }
 
-            @Override
-            public FileLock lock(long position, long size, boolean shared) throws IOException {
-                return null;
-            }
-
-            @Override
-            public FileLock tryLock(long position, long size, boolean shared) throws IOException {
-                return null;
-            }
-
-            @Override
-            protected void implCloseChannel() throws IOException {
-                throw new IOException("expected");
-            }
-        });
-        blobs.close();
+                    @Override
+                    public boolean isOpen() {
+                        return false;
+                    }
+                });
+                blobs.close();
+                blobs = null;
     }
 
     private static void resetFinal(Object inst, String fieldName, Object val) throws Exception {

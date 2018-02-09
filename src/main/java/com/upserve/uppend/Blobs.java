@@ -1,13 +1,17 @@
 package com.upserve.uppend;
 
+import com.google.common.collect.ImmutableSet;
+import com.google.common.primitives.Bytes;
 import com.upserve.uppend.util.ThreadLocalByteBuffers;
 import org.slf4j.Logger;
 
 import java.io.*;
 import java.lang.invoke.MethodHandles;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
+import java.nio.channels.*;
 import java.nio.file.*;
+import java.util.Arrays;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 public class Blobs implements AutoCloseable, Flushable {
@@ -15,7 +19,7 @@ public class Blobs implements AutoCloseable, Flushable {
 
     private final Path file;
 
-    private final FileChannel blobs;
+    private final AsynchronousFileChannel blobs;
     private final AtomicLong blobPosition;
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -31,7 +35,8 @@ public class Blobs implements AutoCloseable, Flushable {
         }
 
         try {
-            blobs = FileChannel.open(file, StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
+            blobs = AsynchronousFileChannel
+                    .open(file, ImmutableSet.of(StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE), AutoFlusher.blobsIOPool);
             blobPosition = new AtomicLong(blobs.size());
         } catch (IOException e) {
             throw new UncheckedIOException("unable to init blob file: " + file, e);
@@ -42,16 +47,34 @@ public class Blobs implements AutoCloseable, Flushable {
         int writeSize = bytes.length + 4;
         final long pos;
         pos = blobPosition.getAndAdd(writeSize);
+        ByteBuffer intBuf = ThreadLocalByteBuffers.LOCAL_INT_BUFFER.get();
+        intBuf.putInt(bytes.length).flip();
+
+        Future<Integer> f = blobs.write(ByteBuffer.wrap(Bytes.concat(intBuf.array(), bytes)), pos);
         try {
-            ByteBuffer intBuf = ThreadLocalByteBuffers.LOCAL_INT_BUFFER.get();
-            intBuf.putInt(bytes.length).flip();
-            blobs.write(intBuf, pos);
-            blobs.write(ByteBuffer.wrap(bytes), pos + 4);
-        } catch (IOException e) {
-            throw new UncheckedIOException("unable write " + writeSize + " bytes at position " + pos + ": " + file, e);
+            f.get();
+        } catch (InterruptedException e) {
+            log.warn("Interrupted while writeing to {}", file);
+        } catch (ExecutionException e) {
+            throw new UncheckedIOException("unable write " + writeSize + " bytes at position " + pos + ": " + file, new IOException(e));
         }
+
         log.trace("appended {} bytes to {} at pos {}", bytes.length, file, pos);
         return pos;
+    }
+
+    private <A> CompletionHandler<Integer, A> onComplete(String operation){
+        return new CompletionHandler<Integer, A>() {
+            @Override
+            public void completed(Integer result, A attachment) {
+                log.trace("Completed {} bytes {} to pos {}", operation, result, attachment );
+            }
+
+            @Override
+            public void failed(Throwable exc, A attachment) {
+                throw new UncheckedIOException("Failed to "+ operation +" bytes at " + attachment, new IOException(exc));
+            }
+        };
     }
 
     public long size(){
@@ -80,7 +103,7 @@ public class Blobs implements AutoCloseable, Flushable {
     @Override
     public void close() {
         log.trace("closing {}", file);
-        closed.set(true);
+        if (closed.getAndSet(true)) return;
         try {
             blobs.close();
         } catch (IOException e) {
@@ -114,10 +137,13 @@ public class Blobs implements AutoCloseable, Flushable {
 
     private void read(long pos, ByteBuffer buf) {
         int len = buf.remaining();
+        Future<Integer> f = blobs.read(buf, pos);
         try {
-            blobs.read(buf, pos);
-        } catch (IOException e) {
-            throw new UncheckedIOException("unable to read " + len + " bytes at pos " + pos + " in " + file, e);
+            f.get();
+        } catch (InterruptedException e) {
+            log.debug("Interrupted during read at pos", pos);
+        } catch (ExecutionException e) {
+            throw new UncheckedIOException("unable to read " + len + " bytes at pos " + pos + " in " + file, new IOException(e));
         }
     }
 

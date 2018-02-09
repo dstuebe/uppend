@@ -13,6 +13,7 @@ public class AutoFlusher {
     private static final Logger log = org.slf4j.LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     private static final int FLUSH_EXEC_POOL_NUM_THREADS = 20;
+    private static final int BLOBS_IO_POOL_NUM_THREADS = 20;
 
     private static final ConcurrentMap<Flushable, Integer> flushableDelays = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Integer, ConcurrentLinkedQueue<Flushable>> delayFlushables = new ConcurrentHashMap<>();
@@ -20,6 +21,7 @@ public class AutoFlusher {
 
     private static final ThreadFactory threadFactory;
     public static final ExecutorService flushExecPool;
+    public static final ExecutorService blobsIOPool;
 
     static {
         ThreadGroup threadGroup = new ThreadGroup("auto-flush");
@@ -34,6 +36,13 @@ public class AutoFlusher {
         AtomicInteger flushExecPoolThreadNumber = new AtomicInteger();
         ThreadFactory flushExecPoolThreadFactory = r -> new Thread(threadGroup, r, "auto-flush-exec-pool-" + flushExecPoolThreadNumber.incrementAndGet());
         flushExecPool = Executors.newFixedThreadPool(FLUSH_EXEC_POOL_NUM_THREADS, flushExecPoolThreadFactory);
+
+
+        ThreadGroup blobsThreadGroup = new ThreadGroup("blobs-io");
+
+        AtomicInteger blobsIOPoolThreadNumber = new AtomicInteger();
+        ThreadFactory blobsIOPoolThreadFactory = r -> new Thread(blobsThreadGroup, r, "blobs-io-pool-" + blobsIOPoolThreadNumber.incrementAndGet());
+        blobsIOPool = Executors.newFixedThreadPool(BLOBS_IO_POOL_NUM_THREADS, blobsIOPoolThreadFactory);
     }
 
     public static synchronized void register(int delaySeconds, Flushable flushable) {
