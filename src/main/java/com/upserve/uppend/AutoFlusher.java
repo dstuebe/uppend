@@ -13,7 +13,7 @@ public class AutoFlusher {
     private static final Logger log = org.slf4j.LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
     private static final int FLUSH_EXEC_POOL_NUM_THREADS = 20;
-    private static final int BLOBS_IO_POOL_NUM_THREADS = 20;
+    private static final int BLOBS_IO_POOL_NUM_THREADS = 120;
 
     private static final ConcurrentMap<Flushable, Integer> flushableDelays = new ConcurrentHashMap<>();
     private static final ConcurrentMap<Integer, ConcurrentLinkedQueue<Flushable>> delayFlushables = new ConcurrentHashMap<>();
