@@ -8,6 +8,7 @@ import java.lang.reflect.*;
 import java.nio.*;
 import java.nio.channels.*;
 import java.nio.file.Paths;
+import java.util.concurrent.Future;
 
 import static org.junit.Assert.assertEquals;
 
@@ -32,10 +33,10 @@ public class BlobsTest {
         long pos = blobs.append("foo".getBytes());
         assertEquals(0, pos);
         pos = blobs.append("bar".getBytes());
-        assertEquals(7, pos);
+        assertEquals(12, pos);
         byte[] bytes = blobs.read(0);
         assertEquals("foo", new String(bytes));
-        bytes = blobs.read(7);
+        bytes = blobs.read(12);
         assertEquals("bar", new String(bytes));
     }
 
@@ -44,7 +45,7 @@ public class BlobsTest {
         long pos = blobs.append("foo".getBytes());
         assertEquals(0, pos);
         pos = blobs.append("bar".getBytes());
-        assertEquals(7, pos);
+        assertEquals(12, pos);
         blobs.clear();
         pos = blobs.append("baz".getBytes());
         assertEquals(0, pos);
@@ -61,35 +62,15 @@ public class BlobsTest {
 
     @Test(expected = UncheckedIOException.class)
     public void testCloseException() throws Exception {
-        resetFinal(blobs, "blobs", new FileChannel() {
+        Object previousBlobs = resetFinal(blobs, "blobs", new AsynchronousFileChannel() {
             @Override
-            public int read(ByteBuffer dst) throws IOException {
-                return 0;
+            public boolean isOpen() {
+                return false;
             }
 
             @Override
-            public long read(ByteBuffer[] dsts, int offset, int length) throws IOException {
-                return 0;
-            }
-
-            @Override
-            public int write(ByteBuffer src) throws IOException {
-                return 0;
-            }
-
-            @Override
-            public long write(ByteBuffer[] srcs, int offset, int length) throws IOException {
-                return 0;
-            }
-
-            @Override
-            public long position() throws IOException {
-                return 0;
-            }
-
-            @Override
-            public FileChannel position(long newPosition) throws IOException {
-                return null;
+            public void close() throws IOException {
+                throw new IOException("expected");
             }
 
             @Override
@@ -98,7 +79,7 @@ public class BlobsTest {
             }
 
             @Override
-            public FileChannel truncate(long size) throws IOException {
+            public AsynchronousFileChannel truncate(long size) throws IOException {
                 return null;
             }
 
@@ -108,32 +89,12 @@ public class BlobsTest {
             }
 
             @Override
-            public long transferTo(long position, long count, WritableByteChannel target) throws IOException {
-                return 0;
+            public <A> void lock(long position, long size, boolean shared, A attachment, CompletionHandler<FileLock, ? super A> handler) {
+
             }
 
             @Override
-            public long transferFrom(ReadableByteChannel src, long position, long count) throws IOException {
-                return 0;
-            }
-
-            @Override
-            public int read(ByteBuffer dst, long position) throws IOException {
-                return 0;
-            }
-
-            @Override
-            public int write(ByteBuffer src, long position) throws IOException {
-                return 0;
-            }
-
-            @Override
-            public MappedByteBuffer map(MapMode mode, long position, long size) throws IOException {
-                return null;
-            }
-
-            @Override
-            public FileLock lock(long position, long size, boolean shared) throws IOException {
+            public Future<FileLock> lock(long position, long size, boolean shared) {
                 return null;
             }
 
@@ -143,19 +104,40 @@ public class BlobsTest {
             }
 
             @Override
-            protected void implCloseChannel() throws IOException {
-                throw new IOException("expected");
+            public <A> void read(ByteBuffer dst, long position, A attachment, CompletionHandler<Integer, ? super A> handler) {
+
+            }
+
+            @Override
+            public Future<Integer> read(ByteBuffer dst, long position) {
+                return null;
+            }
+
+            @Override
+            public <A> void write(ByteBuffer src, long position, A attachment, CompletionHandler<Integer, ? super A> handler) {
+
+            }
+
+            @Override
+            public Future<Integer> write(ByteBuffer src, long position) {
+                return null;
             }
         });
-        blobs.close();
+        try {
+            blobs.close();
+        } finally {
+            resetFinal(blobs, "blobs", previousBlobs);
+        }
     }
 
-    private static void resetFinal(Object inst, String fieldName, Object val) throws Exception {
+    private static Object resetFinal(Object inst, String fieldName, Object val) throws Exception {
         Field field = inst.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         Field modifiersField = Field.class.getDeclaredField("modifiers");
         modifiersField.setAccessible(true);
         modifiersField.setInt(field, field.getModifiers() & ~Modifier.FINAL);
+        Object previous = field.get(inst);
         field.set(inst, val);
+        return previous;
     }
 }
