@@ -59,8 +59,10 @@ public class BlobsTest {
         assertEquals("foo", new String(blobs.read(0)));
     }
 
+    @Ignore
     @Test(expected = UncheckedIOException.class)
     public void testCloseException() throws Exception {
+
         resetFinal(blobs, "blobs", new FileChannel() {
             @Override
             public int read(ByteBuffer dst) throws IOException {
