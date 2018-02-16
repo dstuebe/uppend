@@ -14,11 +14,12 @@ import java.util.concurrent.atomic.*;
 
 public class Blobs implements AutoCloseable, Flushable {
     private static final Logger log = org.slf4j.LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
+    public static final int DEFAULT_BLOB_STRIPES = 8;
 
     private final Path dir;
 
-    private static final int STRIPES = 256;
-    private static final int STRIPE_MASK = STRIPES - 1;
+    private final int stripes;
+    private final int stripeMask;
     private static final long MAX_POSITION = 256L * 256L * 256L * 256L * 256L * 256L; // 6 Bytes allows 256TB per stripe file
 
     // Replace with an array
@@ -29,14 +30,16 @@ public class Blobs implements AutoCloseable, Flushable {
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final boolean readOnly;
 
-    public Blobs(Path blobDir) {
-        this(blobDir, false);
+    public Blobs(Path blobDir,  int stripes) {
+        this(blobDir, stripes,false);
     }
 
-    public Blobs(Path blobDir, boolean readOnly) {
+    public Blobs(Path blobDir,  int stripes, boolean readOnly) {
         this.readOnly = readOnly;
 
         this.dir = blobDir;
+        this.stripes = stripes;
+        this.stripeMask = stripes -1;
 
         try {
             Files.createDirectories(dir);
@@ -51,12 +54,12 @@ public class Blobs implements AutoCloseable, Flushable {
             openOptions = new OpenOption[]{StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE};
         }
 
-        blobChannels = new FileChannel[STRIPES];
-        blobFilePositions = new AtomicLong[STRIPES];
+        blobChannels = new FileChannel[stripes];
+        blobFilePositions = new AtomicLong[stripes];
 
         nextStripe = new AtomicInteger();
 
-        for (int i = 0; i < STRIPES; i++) {
+        for (int i = 0; i < stripes; i++) {
             Path file = dir.resolve("blobs." + String.valueOf(i));
             try {
                 FileChannel chan = FileChannel.open(file, openOptions);
@@ -66,7 +69,6 @@ public class Blobs implements AutoCloseable, Flushable {
                 throw new UncheckedIOException("unable to init or get size of blob file: " + file, e);
             }
         }
-
     }
 
     public long append(byte[] bytes) {
@@ -102,7 +104,7 @@ public class Blobs implements AutoCloseable, Flushable {
             try {
 
                 long size = 0;
-                for (int i = 0; i < STRIPES; i++) {
+                for (int i = 0; i < stripes; i++) {
                     size += blobChannels[i].size();
                 }
                 return size;
@@ -151,7 +153,7 @@ public class Blobs implements AutoCloseable, Flushable {
     public void clear() {
         log.trace("clearing {}", dir);
 
-        for (int i = 0; i < STRIPES; i++) {
+        for (int i = 0; i < stripes; i++) {
             try {
                 blobFilePositions[i].set(0);
                 blobChannels[i].truncate(0);
@@ -167,7 +169,7 @@ public class Blobs implements AutoCloseable, Flushable {
     public void close() {
         log.trace("closing blobs {}", dir);
         closed.set(true);
-        for (int i = 0; i < STRIPES; i++) {
+        for (int i = 0; i < stripes; i++) {
             try {
                 blobChannels[i].close();
             } catch (IOException e) {
@@ -182,7 +184,7 @@ public class Blobs implements AutoCloseable, Flushable {
         log.trace("flushing blobs {}", dir);
         if (readOnly) return;
 
-        for (int i = 0; i < STRIPES; i++) {
+        for (int i = 0; i < stripes; i++) {
             try {
                 blobChannels[i].force(true);
             } catch (IOException e) {
@@ -214,6 +216,6 @@ public class Blobs implements AutoCloseable, Flushable {
     }
 
     private int getNextStripe() {
-        return nextStripe.getAndIncrement() & STRIPE_MASK;
+        return nextStripe.getAndIncrement() & stripeMask;
     }
 }

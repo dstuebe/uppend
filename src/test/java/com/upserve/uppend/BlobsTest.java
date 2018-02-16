@@ -17,7 +17,7 @@ public class BlobsTest {
 
     @Before
     public void initialize() {
-        blobs = new Blobs(Paths.get("build/test/blobs"));
+        blobs = new Blobs(Paths.get("build/test/blobs"), Blobs.DEFAULT_BLOB_STRIPES);
         blobs.clear();
     }
 
@@ -75,7 +75,7 @@ public class BlobsTest {
         assertEquals(844424930131968L, blobs.append("foo".getBytes()));
         blobs.close();
         blobs.close();
-        blobs = new Blobs(Paths.get("build/test/blobs"));
+        blobs = new Blobs(Paths.get("build/test/blobs"), Blobs.DEFAULT_BLOB_STRIPES);
         assertEquals("foo", new String(blobs.read(844424930131968L)));
     }
 

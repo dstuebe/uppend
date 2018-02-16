@@ -13,7 +13,8 @@ public class AppendOnlyStoreBuilder {
     private int longLookupHashSize = LongLookup.DEFAULT_HASH_SIZE;
     private int longLookupWriteCacheSize = LongLookup.DEFAULT_WRITE_CACHE_SIZE;
     private int flushDelaySeconds = FileAppendOnlyStore.DEFAULT_FLUSH_DELAY_SECONDS;
-    private int blobsPerBlock = FileAppendOnlyStore.NUM_BLOBS_PER_BLOCK;
+    private int blobsPerBlock = FileAppendOnlyStore.DEFAULT_NUM_BLOBS_PER_BLOCK;
+    private int blobStripes = Blobs.DEFAULT_BLOB_STRIPES;
 
     private MetricRegistry metrics;
 
@@ -37,6 +38,11 @@ public class AppendOnlyStoreBuilder {
 
     public AppendOnlyStoreBuilder withBlobsPerBlock(int blobsPerBlock){
         this.blobsPerBlock = blobsPerBlock;
+        return this;
+    }
+
+    public AppendOnlyStoreBuilder withBlobStripes(int stripes){
+        this.blobStripes = stripes;
         return this;
     }
 
@@ -65,12 +71,12 @@ public class AppendOnlyStoreBuilder {
         AppendOnlyStore store;
 
         if (readOnly) {
-            store = new FileAppendOnlyStore(dir, -1, false, longLookupHashSize, 0, blobsPerBlock);
+            store = new FileAppendOnlyStore(dir, -1, false, longLookupHashSize, 0, blobsPerBlock, blobStripes);
         } else if (suggestedBufferSize > 0) {
             // Add log message about ignored parameters
-            store = new BufferedAppendOnlyStore(dir, true, longLookupHashSize, suggestedBufferSize, blobsPerBlock, Optional.ofNullable(executorService));
+            store = new BufferedAppendOnlyStore(dir, true, longLookupHashSize, suggestedBufferSize, blobsPerBlock, blobStripes, Optional.ofNullable(executorService));
         } else {
-            store = new FileAppendOnlyStore(dir, flushDelaySeconds, true, longLookupHashSize, longLookupWriteCacheSize, blobsPerBlock);
+            store = new FileAppendOnlyStore(dir, flushDelaySeconds, true, longLookupHashSize, longLookupWriteCacheSize, blobsPerBlock, blobStripes);
         }
 
         if (metrics != null) {
@@ -80,7 +86,7 @@ public class AppendOnlyStoreBuilder {
     }
 
     public ReadOnlyAppendOnlyStore buildReadOnly() {
-        AppendOnlyStore store = new FileAppendOnlyStore(dir, -1, false, longLookupHashSize,  0, blobsPerBlock);
+        AppendOnlyStore store = new FileAppendOnlyStore(dir, -1, false, longLookupHashSize,  0, blobsPerBlock, blobStripes);
         if (metrics != null) {
             store = new AppendOnlyStoreWithMetrics(store, metrics);
         }
