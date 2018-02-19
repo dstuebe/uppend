@@ -41,17 +41,17 @@ public class BlobsTest {
 
     @Test
     public void testReadOnly() {
-        Blobs readOnlyBlobs = new Blobs(Paths.get("build/test/blobs"), true);
+        Blobs readOnlyBlobs = new Blobs(Paths.get("build/test/blobs"), Blobs.DEFAULT_BLOB_STRIPES, true);
 
 
         long pos = blobs.append("foo".getBytes());
-        assertEquals(0, pos);
+        assertEquals(844424930131968L, pos);
         pos = blobs.append("bar".getBytes());
-        assertEquals(7, pos);
+        assertEquals(72902018968059904L, pos);
 
-        byte[] bytes = readOnlyBlobs.read(0);
+        byte[] bytes = readOnlyBlobs.read(844424930131968L);
         assertEquals("foo", new String(bytes));
-        bytes = readOnlyBlobs.read(7);
+        bytes = readOnlyBlobs.read(72902018968059904L);
         assertEquals("bar", new String(bytes));
 
         readOnlyBlobs.close();
