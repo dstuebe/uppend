@@ -139,10 +139,12 @@ public class Blobs implements AutoCloseable, Flushable {
                     }
                 }
             }
-            int readSize = blobBuffers[stripe].getInt(pos);
-            result = new byte[readSize];
-            for (int i = 0; i < readSize; i++) {
-                result[i] = blobBuffers[stripe].get(pos + i + 4);
+
+            synchronized (Integer.valueOf(stripe)) {
+                blobBuffers[stripe].position(pos);
+                int readSize = blobBuffers[stripe].getInt();
+                result = new byte[readSize];
+                blobBuffers[stripe].get(result);
             }
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to read bytes from blob stripe " + stripe + " @ " + pos, e);
