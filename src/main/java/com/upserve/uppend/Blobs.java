@@ -24,7 +24,7 @@ public class Blobs implements AutoCloseable, Flushable {
 
     // Replace with an array
     private final FileChannel[] blobChannels;
-    private final MappedByteBuffer[] blobBuffers;
+    private final byte[][] blobBuffers;
     private final AtomicLong[] blobFilePositions;
     private final AtomicInteger nextStripe;
 
@@ -56,7 +56,7 @@ public class Blobs implements AutoCloseable, Flushable {
         }
 
         blobChannels = new FileChannel[stripes];
-        blobBuffers = new MappedByteBuffer[stripes];
+        blobBuffers = new byte[stripes][];
         blobFilePositions = new AtomicLong[stripes];
 
         nextStripe = new AtomicInteger();
@@ -129,23 +129,24 @@ public class Blobs implements AutoCloseable, Flushable {
         int pos = Ints.fromBytes(longBytes[4], longBytes[5], longBytes[6], longBytes[7]);
 
         byte[] result;
+        byte[] buffer = blobBuffers[stripe];
 
         try {
-            if (blobBuffers[stripe] == null || blobBuffers[stripe].capacity() != blobChannels[stripe].size()) {
+            if (buffer == null || buffer.length != blobChannels[stripe].size()) {
+                log.info("Considering re-reading {}", stripe);
                 synchronized (Integer.valueOf(stripe)) {
-                    if (blobBuffers[stripe] == null || blobBuffers[stripe].capacity() != blobChannels[stripe].size()) {
-                        blobBuffers[stripe] = blobChannels[stripe].map(FileChannel.MapMode.READ_ONLY, 0, blobChannels[stripe].size());
-                        log.info("Re-reading {}: {} != {}", stripe, blobBuffers[stripe].capacity(), blobChannels[stripe].size());
+                    if (blobBuffers[stripe] == null || blobBuffers[stripe].length != blobChannels[stripe].size()) {
+                        log.info("Re-reading {}: {} != {}", stripe, blobBuffers[stripe] != null ? blobBuffers[stripe].length : -1, blobChannels[stripe].size());
+                        blobBuffers[stripe] = Files.readAllBytes(dir.resolve("blobs." + String.valueOf(stripe)));
+                        log.info("Read {} into {}", blobBuffers[stripe].length, stripe);
                     }
+                    buffer = blobBuffers[stripe];
                 }
             }
 
-            synchronized (Integer.valueOf(stripe)) {
-                blobBuffers[stripe].position(pos);
-                int readSize = blobBuffers[stripe].getInt();
-                result = new byte[readSize];
-                blobBuffers[stripe].get(result);
-            }
+            int readSize = Ints.fromBytes(buffer[pos], buffer[pos + 1], buffer[pos + 2], buffer[pos + 3]);
+            result = new byte[readSize];
+            System.arraycopy(buffer, pos + 4, result, 0, readSize);
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to read bytes from blob stripe " + stripe + " @ " + pos, e);
         }
