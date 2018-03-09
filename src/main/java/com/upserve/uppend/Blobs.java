@@ -6,7 +6,7 @@ import org.slf4j.Logger;
 
 import java.io.*;
 import java.lang.invoke.MethodHandles;
-import java.nio.ByteBuffer;
+import java.nio.*;
 import java.nio.channels.FileChannel;
 import java.nio.file.*;
 import java.util.*;
@@ -24,6 +24,7 @@ public class Blobs implements AutoCloseable, Flushable {
 
     // Replace with an array
     private final FileChannel[] blobChannels;
+    private final MappedByteBuffer[] blobBuffers;
     private final AtomicLong[] blobFilePositions;
     private final AtomicInteger nextStripe;
 
@@ -55,6 +56,7 @@ public class Blobs implements AutoCloseable, Flushable {
         }
 
         blobChannels = new FileChannel[stripes];
+        blobBuffers = new MappedByteBuffer[stripes];
         blobFilePositions = new AtomicLong[stripes];
 
         nextStripe = new AtomicInteger();
@@ -124,29 +126,29 @@ public class Blobs implements AutoCloseable, Flushable {
         log.trace("reading from {} with {}", dir, longBytes);
 
         int stripe = byteToUnsignedInt(longBytes[0]);
-        int sizeBound = intPowTwo(longBytes[1]);
+        int pos = Ints.fromBytes(longBytes[4], longBytes[5], longBytes[6], longBytes[7]);
 
-        long pos = Longs.fromBytes((byte) 0, (byte) 0, longBytes[2], longBytes[3], longBytes[4], longBytes[5], longBytes[6], longBytes[7]);
+        byte[] result;
 
-        byte[] buf = new byte[sizeBound];
-
-        int readSize;
         try {
-            readSize = blobChannels[stripe].read(ByteBuffer.wrap(buf), pos);
-            if (readSize < 4) throw new IOException("Unable to read at least 4 bytes");
+            if (blobBuffers[stripe] == null || blobBuffers[stripe].capacity() != blobChannels[stripe].size()) {
+                synchronized (Integer.valueOf(stripe)) {
+                    if (blobBuffers[stripe] == null || blobBuffers[stripe].capacity() != blobChannels[stripe].size()) {
+                        blobBuffers[stripe] = blobChannels[stripe].map(FileChannel.MapMode.READ_ONLY, 0, blobChannels[stripe].size());
+                        log.info("Re-reading {}: {} != {}", stripe, blobBuffers[stripe].capacity(), blobChannels[stripe].size());
+                    }
+                }
+            }
+            int readSize = blobBuffers[stripe].getInt(pos);
+            result = new byte[readSize];
+            for (int i = 0; i < readSize; i++) {
+                result[i] = blobBuffers[stripe].get(pos + i + 4);
+            }
         } catch (IOException e) {
-            throw new UncheckedIOException("Unable to read " + sizeBound + " bytes from blob stripe " + stripe + " @ " + pos, e);
+            throw new UncheckedIOException("Unable to read bytes from blob stripe " + stripe + " @ " + pos, e);
         }
 
-        int size = Ints.fromBytes(buf[0], buf[1], buf[2], buf[3]);
-
-        if (readSize < (4 + size)) {
-            throw new RuntimeException("Unable to read correct number of bytes from blob stripe" + stripe + " @ " + pos + ", read " + readSize + " but record " + size + " is greater");
-        }
-
-        final byte[] result = Arrays.copyOfRange(buf, 4, size + 4);
-
-        log.trace("read {} bytes from blob stripe {} @ {}", size, stripe, pos);
+        log.trace("read {} bytes from blob stripe {} @ {}", result.length, stripe, pos);
         return result;
     }
 
