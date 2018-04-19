@@ -6,9 +6,10 @@ import org.slf4j.Logger;
 
 import java.io.*;
 import java.lang.invoke.MethodHandles;
-import java.nio.channels.FileChannel;
+import java.nio.channels.*;
 import java.nio.file.*;
 import java.util.concurrent.*;
+import java.util.function.Function;
 
 /**
  * A cache of open file handles.
@@ -18,41 +19,31 @@ import java.util.concurrent.*;
 public class FileCache implements Flushable {
     private static final Logger log = org.slf4j.LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
-    private final LoadingCache<Path, FileChannel> fileCache;
-
+    private final LoadingCache<Path, FileCacheEntry> fileCache;
     private final boolean readOnly;
 
     public FileCache(int initialCacheSize, int maximumCacheSize, boolean readOnly){
-
         this.readOnly = readOnly;
-
-        OpenOption[] openOptions;
-        if (readOnly) {
-            openOptions = new OpenOption[]{StandardOpenOption.READ};
-        } else {
-            openOptions = new OpenOption[]{StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE};
-        }
-
         this.fileCache = Caffeine
-                .<Path, FileChannel>newBuilder()
+                .<Path, FileCacheEntry>newBuilder()
 //                .executor(Executors.newCachedThreadPool())
                 .initialCapacity(initialCacheSize)
                 .maximumSize(maximumCacheSize)
-                .expireAfterAccess(300, TimeUnit.DAYS)
+                .expireAfterAccess(1, TimeUnit.HOURS)
                 .recordStats()
-                .<Path, FileChannel>removalListener((key, value, cause) ->  {
-                    log.debug("Called removal on {} with cause {}", key, cause);
-                    if (value != null && value.isOpen()) {
-                        try {
-                            value.close();
-                        } catch (IOException e) {
-                            log.error("Unable to close file {}", key, e);
-                        }
+                .<Path, FileCacheEntry>removalListener((key, value, cause) ->  {
+                    log.debug("Called removal on key {}, value {} with cause {}", key, value, cause);
+                    if (value == null) return;
+                    try {
+                        value.close();
+                    } catch (IOException e) {
+                        log.error("Unable to close file {}", key, e);
                     }
+
                 })
-                .<Path, FileChannel>build(path -> {
+                .<Path, FileCacheEntry>build(path -> {
                     log.debug("opening {} in file cache", path);
-                    return FileChannel.open(path, openOptions);
+                    return FileCacheEntry.open(path, readOnly);
                 });
     }
 
@@ -60,11 +51,11 @@ public class FileCache implements Flushable {
         return readOnly;
     }
 
-    public FileChannel getFileChannel(Path path){
+    public FileCacheEntry getEntry(Path path){
         return fileCache.get(path);
     }
 
-    public FileChannel getFileChannelIfPresent(Path path) { return fileCache.getIfPresent(path); }
+    public FileCacheEntry getEntryIfPresent(Path path) { return fileCache.getIfPresent(path); }
 
     @Override
     public void flush(){

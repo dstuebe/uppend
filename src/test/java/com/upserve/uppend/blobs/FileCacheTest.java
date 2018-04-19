@@ -7,7 +7,7 @@ import org.junit.rules.ExpectedException;
 
 import java.io.*;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
+import java.nio.channels.ClosedChannelException;
 import java.nio.file.*;
 import java.util.Random;
 import java.util.concurrent.CompletionException;
@@ -49,96 +49,47 @@ public class FileCacheTest {
         instance = new FileCache(64, 256, true);
         assertTrue(instance.readOnly());
 
-        assertEquals(null, instance.getFileChannelIfPresent(fileDoesNotExist));
+        assertEquals(null, instance.getEntryIfPresent(fileDoesNotExist));
 
         thrown.expect(CompletionException.class);
         thrown.expectCause(any(NoSuchFileException.class));
 
-        instance.getFileChannel(fileDoesNotExist);
-    }
-
-    @Test
-    public void testReadOnlyNonExistentPath(){
-        instance = new FileCache(64, 256, true);
-        assertTrue(instance.readOnly());
-
-        assertEquals(null, instance.getFileChannelIfPresent(pathDoesNotExist));
-
-        thrown.expect(CompletionException.class);
-        thrown.expectCause(any(NoSuchFileException.class));
-
-        instance.getFileChannel(pathDoesNotExist);
+        instance.getEntry(fileDoesNotExist);
     }
 
     @Test
     public void testReadOnlyExists() throws InterruptedException {
-        instance = new FileCache(64, 256, true);
-        assertTrue(instance.readOnly());
-
-        assertEquals(null, instance.getFileChannelIfPresent(existingFile));
-
-        FileChannel expected = instance.getFileChannel(existingFile);
-
-        assertEquals(expected, instance.getFileChannelIfPresent(existingFile));
-
-        assertTrue(expected.isOpen());
-
-        instance.flush();
-
-        // Wait for async removal listener
-        Thread.sleep(100);
-
-        assertFalse(expected.isOpen());
-
-        assertEquals(null, instance.getFileChannelIfPresent(existingFile));
+        testHelper(existingFile, true);
     }
 
     @Test
     public void testReadWriteFileDoesExists() throws InterruptedException {
-        instance = new FileCache(64, 256, false);
-        assertFalse(instance.readOnly());
-
-        assertEquals(null, instance.getFileChannelIfPresent(existingFile));
-
-        FileChannel existingFileChannel = instance.getFileChannel(existingFile);
-        assertEquals(existingFileChannel, instance.getFileChannelIfPresent(existingFile));
-        assertTrue(existingFileChannel.isOpen());
-
-        instance.flush();
-
-        // Wait for async removal listener
-        Thread.sleep(100);
-
-        assertFalse(existingFileChannel.isOpen());
-
-        assertEquals(null, instance.getFileChannelIfPresent(existingFile));
+        testHelper(existingFile, false);
     }
 
     @Test
     public void testReadWriteFileDoesNotExist() throws InterruptedException {
-        instance = new FileCache(64, 256, false);
-        assertFalse(instance.readOnly());
+        testHelper(fileDoesNotExist, false);
+    }
 
-        assertEquals(null, instance.getFileChannelIfPresent(fileDoesNotExist));
+    public void testHelper(Path path, boolean readOnly) throws InterruptedException {
+        instance = new FileCache(64, 256, readOnly);
+        assertEquals(readOnly, instance.readOnly());
 
-        FileChannel newFileChannel = instance.getFileChannel(fileDoesNotExist);
-        assertEquals(newFileChannel, instance.getFileChannelIfPresent(fileDoesNotExist));
-        assertTrue(newFileChannel.isOpen());
+        assertEquals(null, instance.getEntryIfPresent(path));
+
+        FileCacheEntry newFileChannel = instance.getEntry(path);
+        assertEquals(newFileChannel, instance.getEntryIfPresent(path));
+        assertTrue(newFileChannel.fileChannel.isOpen());
 
         instance.flush();
 
         // Wait for async removal listener
         Thread.sleep(100);
 
-        assertFalse(newFileChannel.isOpen());
+        assertFalse(newFileChannel.fileChannel.isOpen());
 
-        assertEquals(null, instance.getFileChannelIfPresent(fileDoesNotExist));
-
-        thrown.expect(CompletionException.class);
-        thrown.expectCause(any(NoSuchFileException.class));
-
-        FileChannel fc = instance.getFileChannel(pathDoesNotExist);
-        assertEquals(null, fc);
+        assertEquals(null, instance.getEntryIfPresent(path));
     }
 
     @Test
@@ -149,7 +100,7 @@ public class FileCacheTest {
         thrown.expect(CompletionException.class);
         thrown.expectCause(any(NoSuchFileException.class));
 
-        FileChannel fc = instance.getFileChannel(pathDoesNotExist);
+        FileCacheEntry fc = instance.getEntry(pathDoesNotExist);
         assertEquals(null, fc);
     }
 
@@ -157,24 +108,32 @@ public class FileCacheTest {
     public void testHammerFileCache(){
         instance = new FileCache(64, 256, false);
 
-        final int requests = 1_000_000;
+        final int requests = 1024 * 1024;
 
         ByteBuffer byteBuffer = ByteBuffer.allocate(4);
-        byteBuffer.putInt(1_000_000);
+        byteBuffer.putInt(10);
         byteBuffer.flip();
 
         new Random()
-                .ints(requests, 0, 1000)
+                .ints(requests, 0, 1024)
                 .parallel()
                 .forEach(val -> {
+                    int retries = 5;
                     try {
-                        instance.getFileChannel(rootPath.resolve("tst" + val)).write(byteBuffer);
+                        while (retries > 0) {
+                            try {
+                               instance.getEntry(rootPath.resolve("tst" + val)).fileChannel.write(byteBuffer);
+                               break;
+                            } catch (ClosedChannelException e) {
+                                retries--;
+                            }
+                        }
                     } catch (IOException e) {
                         throw new UncheckedIOException("Could not write to tst" + val, e);
                     }
                 });
         CacheStats stats = instance.stats();
         assertEquals(requests, stats.requestCount());
-        assertEquals(256D/1000, stats.hitRate(), 25);
+        assertEquals(0.25, stats.hitRate(), 0.05);
     }
 }

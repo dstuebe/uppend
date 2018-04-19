@@ -142,16 +142,16 @@ public class PageCacheTest {
         fileCache = new FileCache(64, 256, false);
         instance = new PageCache(512, 128, 256, fileCache);
 
-        instance.getPage(existingFile, 1000*512).flush();
+        // instance.getPage(existingFile, 1000*512).flush();
 
-        final int requests = 1_000_000;
+        final int requests = 1024 * 1024;
 
         new Random()
                 .longs(requests, 0, 1000 * 512)
                 .parallel()
                 .forEach(val -> instance.getPage(existingFile, val).put(instance.pagePosition(val), Longs.toByteArray(val), 0));
         CacheStats stats = instance.stats();
-        assertEquals(requests+1, stats.requestCount());
+        assertEquals(requests, stats.requestCount());
         assertEquals(256D/1000, stats.hitRate(), 25);
     }
 

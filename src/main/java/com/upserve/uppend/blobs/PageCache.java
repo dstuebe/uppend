@@ -2,7 +2,6 @@ package com.upserve.uppend.blobs;
 
 import com.github.benmanes.caffeine.cache.*;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
-import com.sun.javaws.exceptions.InvalidArgumentException;
 import org.slf4j.Logger;
 
 import java.io.*;
@@ -10,7 +9,6 @@ import java.lang.invoke.MethodHandles;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.util.concurrent.ForkJoinPool;
 
 public class PageCache implements Flushable {
     private static final Logger log = org.slf4j.LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
@@ -26,20 +24,37 @@ public class PageCache implements Flushable {
                 .<PageKey, FilePage>newBuilder()
                 .initialCapacity(initialCacheSize)
                 .maximumSize(maximumCacheSize)
-                .executor(new ForkJoinPool())
+                //.executor(new ForkJoinPool())
                 .recordStats()
                 .<PageKey, FilePage>removalListener((key, value, cause) ->  {
                     log.debug("Called removal on {} with cause {}", key, cause);
                     if (value != null) value.flush();
                 })
-                .<PageKey, FilePage>build(key -> {
-                    log.debug("new FilePage from {}", key);
-                    final long filePosition = pageSize * key.getPage() ;
-                    MappedByteBuffer buffer = fileCache
-                            .getFileChannel(key.getFilePath())
-                            .map(fileCache.readOnly() ? FileChannel.MapMode.READ_ONLY: FileChannel.MapMode.READ_WRITE, filePosition, pageSize);
-                    return new FilePage(buffer);
-                });
+                .<PageKey, FilePage>build(loadingCache());
+    }
+
+    private CacheLoader<PageKey, FilePage> loadingCache() {
+        return key -> {
+            log.debug("new FilePage from {}", key);
+            final long filePosition = pageSize * key.getPage() ;
+
+            FileCacheEntry fileCacheEntry = fileCache.getEntry(key.getFilePath());
+            final MappedByteBuffer buffer;
+            if (fileCache.readOnly()) {
+                buffer = fileCacheEntry.fileChannel.map(FileChannel.MapMode.READ_ONLY, filePosition, pageSize);
+            } else {
+                final long pageEnd = filePosition + pageSize;
+                buffer = fileCacheEntry.fileChannel.map(FileChannel.MapMode.READ_WRITE, filePosition, pageSize);
+                final long previous = fileCacheEntry.fileSize.getAndUpdate(currentSize -> currentSize > pageEnd ? currentSize : pageEnd);
+                if (previous < pageEnd) {
+                    synchronized (fileCacheEntry) {
+                        buffer.force();
+                    }
+                }
+            }
+
+            return new FilePage(buffer);
+        };
     }
 
     FilePage getPage(Path filePath, long pos){

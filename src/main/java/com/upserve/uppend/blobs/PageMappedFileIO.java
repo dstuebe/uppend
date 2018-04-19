@@ -41,7 +41,10 @@ public class PageMappedFileIO implements Flushable {
         }
 
         try {
-            posBuf = fileCache.getFileChannel(file).map(fileCache.readOnly() ? FileChannel.MapMode.READ_ONLY : FileChannel.MapMode.READ_WRITE, 0, 8);
+            posBuf = fileCache
+                    .getEntry(file)
+                    .fileChannel
+                    .map(fileCache.readOnly() ? FileChannel.MapMode.READ_ONLY : FileChannel.MapMode.READ_WRITE, 0, 8);
         } catch (IOException e) {
             throw new UncheckedIOException("unable to open paged file for path: " + file, e);
         }
@@ -78,7 +81,7 @@ public class PageMappedFileIO implements Flushable {
         try {
             position.set(8);
             posBuf.putLong(0,8);
-            fileCache.getFileChannel(filePath).truncate(8);
+            fileCache.getEntry(filePath).fileChannel.truncate(8);
         } catch (IOException e) {
             throw new UncheckedIOException("unable to clear", e);
         }
