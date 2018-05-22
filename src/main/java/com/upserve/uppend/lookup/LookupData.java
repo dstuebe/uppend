@@ -28,7 +28,7 @@ public class LookupData implements Flushable {
     // keys written but not yet written to the metadata live here
     final ConcurrentHashMap<LookupKey, Long> flushCache;
 
-    AtomicReference<LookupMetadata> flushReference;
+    final AtomicReference<LookupMetadata> flushReference;
 
     private final boolean readOnly;
 
@@ -303,21 +303,40 @@ public class LookupData implements Flushable {
      * @return Long value or null if not present
      */
     private Long findValueFor(LookupKey key) {
+        return partitionLookupCache.getMetadata(this).findKey(keyLongBlobs, key);
+    }
+
+    LookupMetadata loadMetadata() {
         LookupMetadata lookupMetadata;
 
-        if (readOnly){
+        if (readOnly) {
             try {
-                lookupMetadata = partitionLookupCache.getMetadata(this);
+                lookupMetadata = LookupMetadata.open(
+                        getMetadataBlobs(),
+                        getMetaDataGeneration()
+                );
             } catch (IllegalStateException e) {
                 // Try again and let the exception bubble if it fails
                 log.warn("getMetaData failed for read only store - attempting to reload!", e);
-                lookupMetadata = partitionLookupCache.getMetadata(this);
+                lookupMetadata = LookupMetadata.open(
+                        getMetadataBlobs(),
+                        getMetaDataGeneration()
+                );
             }
         } else {
-            lookupMetadata = flushReference.get();
+            lookupMetadata = flushReference.get(); // Check and see if we have stored it during flush
             if (Objects.isNull(lookupMetadata)) {
                 try {
-                    lookupMetadata = partitionLookupCache.getMetadata(this);
+                    // Acquire the lock and try the reference again. If still not there, load it.
+                    synchronized (flushReference) {
+                        lookupMetadata = flushReference.get();
+                        if (Objects.isNull(lookupMetadata)) {
+                            lookupMetadata = LookupMetadata.open(
+                                    getMetadataBlobs(),
+                                    getMetaDataGeneration()
+                            );
+                        }
+                    }
                 } catch (IllegalStateException e) {
                     log.warn("getMetaData failed for read write store - attempting to repair it!", e);
                     lookupMetadata = repairMetadata();
@@ -325,7 +344,7 @@ public class LookupData implements Flushable {
             }
         }
 
-        return lookupMetadata.findKey(keyLongBlobs, key);
+        return lookupMetadata;
     }
 
     private synchronized LookupMetadata repairMetadata() {
@@ -337,9 +356,7 @@ public class LookupData implements Flushable {
             int sortedPositionsSize = sortedPositions.length;
             LookupKey minKey = sortedPositionsSize > 0 ? readKey(sortedPositions[0]) : null;
             LookupKey maxKey = sortedPositionsSize > 0 ? readKey(sortedPositions[sortedPositionsSize - 1]) : null;
-            LookupMetadata metadata = LookupMetadata.generateMetadata(minKey, maxKey, sortedPositions, metadataBlobs, metaDataGeneration.incrementAndGet());
-            partitionLookupCache.putMetadata(this, metadata);
-            return metadata;
+            return LookupMetadata.generateMetadata(minKey, maxKey, sortedPositions, metadataBlobs, metaDataGeneration.incrementAndGet());
         } catch (IOException e) {
             throw new UncheckedIOException("Unable to write repaired metadata!", e);
         }
@@ -377,6 +394,7 @@ public class LookupData implements Flushable {
 
     /**
      * Only counts flushed keys.
+     *
      * @return the number of keys
      */
     public int keyCount() {
@@ -470,8 +488,10 @@ public class LookupData implements Flushable {
         log.debug("Finished creating sortOrder");
 
         try {
-            LookupMetadata metadata = LookupMetadata.generateMetadata(minKey, maxKey, newKeySortOrder, metadataBlobs, metaDataGeneration.incrementAndGet());
-            partitionLookupCache.putMetadata(this, metadata);
+            synchronized (flushReference) {
+                LookupMetadata metadata = LookupMetadata.generateMetadata(minKey, maxKey, newKeySortOrder, metadataBlobs, metaDataGeneration.incrementAndGet());
+                partitionLookupCache.putMetadata(this, metadata);
+            }
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to write new metadata!", e);
         }
