@@ -336,7 +336,6 @@ public class LookupData implements Flushable {
                 );
             }
         } else {
-            log.info("Loading Metadata!");
             try {
                 return LookupMetadata.open(
                         getMetadataBlobs(),
@@ -518,8 +517,6 @@ public class LookupData implements Flushable {
                 LookupMetadata metadata = flushReference.get();
                 if (Objects.isNull(metadata)) {
                     metadata = partitionLookupCache.getMetadata(this);
-                } else {
-                    log.info("got flush reference");
                 }
                 return metadata;
             } finally {
