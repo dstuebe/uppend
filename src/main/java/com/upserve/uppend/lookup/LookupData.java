@@ -28,7 +28,12 @@ public class LookupData implements Flushable {
     // keys written but not yet written to the metadata live here
     final ConcurrentHashMap<LookupKey, Long> flushCache;
 
-    final AtomicReference<LookupMetadata> flushReference;
+
+    private final AtomicReference<LookupMetadata> flushReference;
+    private final ReadWriteLock metadataLock;
+    private final Lock metadataReadLock;
+    private final Lock metadataWriteLock;
+
 
     private final boolean readOnly;
 
@@ -36,9 +41,9 @@ public class LookupData implements Flushable {
 
     private final VirtualMutableBlobStore metadataBlobs;
 
-    private final ReadWriteLock flushLock;
-    private final Lock readLock;
-    private final Lock writeLock;
+    private final ReadWriteLock consistentWriteCacheLock;
+    private final Lock consistentWriteCacheReadLock;
+    private final Lock consistentWriteCacheWriteLock;
 
     // Flushing every 30 seconds, we can run for 2000 years before the metaDataGeneration hits INTEGER.MAX_VALUE
     private AtomicInteger metaDataGeneration;
@@ -62,19 +67,28 @@ public class LookupData implements Flushable {
             writeCache = null;
             flushCache = null;
             flushReference = null;
+
+            metadataLock = null;
+            metadataReadLock = null;
+            metadataWriteLock = null;
+
         } else {
             writeCache = new ConcurrentHashMap<>();
             flushCache = new ConcurrentHashMap<>();
             flushReference = new AtomicReference<>();
+
+            metadataLock = new ReentrantReadWriteLock();
+            metadataReadLock = metadataLock.readLock();
+            metadataWriteLock = metadataLock.writeLock();
         }
 
         writeCacheCounter = new AtomicInteger();
 
         metaDataGeneration = new AtomicInteger();
 
-        flushLock = new ReentrantReadWriteLock();
-        readLock = flushLock.readLock();
-        writeLock = flushLock.writeLock();
+        consistentWriteCacheLock = new ReentrantReadWriteLock();
+        consistentWriteCacheReadLock = consistentWriteCacheLock.readLock();
+        consistentWriteCacheWriteLock = consistentWriteCacheLock.writeLock();
     }
 
     /**
@@ -303,48 +317,36 @@ public class LookupData implements Flushable {
      * @return Long value or null if not present
      */
     private Long findValueFor(LookupKey key) {
-        return partitionLookupCache.getMetadata(this).findKey(keyLongBlobs, key);
+        return getMetadata().findKey(keyLongBlobs, key);
     }
 
     LookupMetadata loadMetadata() {
-        LookupMetadata lookupMetadata;
-
         if (readOnly) {
             try {
-                lookupMetadata = LookupMetadata.open(
+                return LookupMetadata.open(
                         getMetadataBlobs(),
                         getMetaDataGeneration()
                 );
             } catch (IllegalStateException e) {
                 // Try again and let the exception bubble if it fails
                 log.warn("getMetaData failed for read only store - attempting to reload!", e);
-                lookupMetadata = LookupMetadata.open(
+                return LookupMetadata.open(
                         getMetadataBlobs(),
                         getMetaDataGeneration()
                 );
             }
         } else {
-            lookupMetadata = flushReference.get(); // Check and see if we have stored it during flush
-            if (Objects.isNull(lookupMetadata)) {
-                try {
-                    // Acquire the lock and try the reference again. If still not there, load it.
-                    synchronized (flushReference) {
-                        lookupMetadata = flushReference.get();
-                        if (Objects.isNull(lookupMetadata)) {
-                            lookupMetadata = LookupMetadata.open(
-                                    getMetadataBlobs(),
-                                    getMetaDataGeneration()
-                            );
-                        }
-                    }
-                } catch (IllegalStateException e) {
-                    log.warn("getMetaData failed for read write store - attempting to repair it!", e);
-                    lookupMetadata = repairMetadata();
-                }
+            log.info("Loading Metadata!");
+            try {
+                return LookupMetadata.open(
+                        getMetadataBlobs(),
+                        getMetaDataGeneration()
+                );
+            } catch (IllegalStateException e) {
+                log.warn("getMetaData failed for read write store - attempting to repair it!", e);
+                return repairMetadata();
             }
         }
-
-        return lookupMetadata;
     }
 
     private synchronized LookupMetadata repairMetadata() {
@@ -398,7 +400,7 @@ public class LookupData implements Flushable {
      * @return the number of keys
      */
     public int keyCount() {
-        return partitionLookupCache.getMetadata(this).getNumKeys();
+        return getMetadata().getNumKeys();
     }
 
     void flushWriteCache(LookupMetadata currentMetadata) {
@@ -413,7 +415,7 @@ public class LookupData implements Flushable {
         try {
             // Write lock while we move entries from the writeCache to the flush cache
             // This does not block new inserts - only scan operations that need a consistent view of the flushCache and writeCache
-            writeLock.lock();
+            consistentWriteCacheWriteLock.lock();
             keys.stream()
                     .peek(key -> {
                         // Check the metadata generation of the LookupKeys
@@ -436,7 +438,7 @@ public class LookupData implements Flushable {
                     );
 
         } finally {
-            writeLock.unlock();
+            consistentWriteCacheWriteLock.unlock();
         }
 
         log.debug("flushed keys");
@@ -506,6 +508,26 @@ public class LookupData implements Flushable {
         }
     }
 
+    private LookupMetadata getMetadata() {
+        if (readOnly){
+            return partitionLookupCache.getMetadata(this);
+        } else {
+
+            try {
+                metadataReadLock.lock();
+                LookupMetadata metadata = flushReference.get();
+                if (Objects.isNull(metadata)) {
+                    metadata = partitionLookupCache.getMetadata(this);
+                } else {
+                    log.info("got flush reference");
+                }
+                return metadata;
+            } finally {
+                metadataReadLock.unlock();
+            }
+        }
+    }
+
 
     @Override
     public synchronized void flush() {
@@ -514,9 +536,16 @@ public class LookupData implements Flushable {
         if (writeCache.size() > 0) {
             log.debug("starting flush");
 
-            LookupMetadata currentMetadata = partitionLookupCache.getMetadata(this);
+            LookupMetadata currentMetadata;
+            try {
+                // Need to atomically get the cached metadata and hold the reference while we flush
+                metadataWriteLock.lock();
+                currentMetadata = partitionLookupCache.getMetadata(this);
+                flushReference.set(currentMetadata);
+            } finally {
+                metadataWriteLock.unlock();
+            }
 
-            flushReference.set(currentMetadata);
             try {
                 flushWriteCache(currentMetadata);
 
@@ -536,11 +565,11 @@ public class LookupData implements Flushable {
 
     private long[] getKeyPosition() {
         if (readOnly) {
-            return partitionLookupCache.getMetadata(this).getKeyStorageOrder();
+            return getMetadata().getKeyStorageOrder();
         } else {
             return LongStream.concat(
                     flushCache.keySet().stream().mapToLong(LookupKey::getPosition),
-                    Arrays.stream(partitionLookupCache.getMetadata(this).getKeyStorageOrder())
+                    Arrays.stream(getMetadata().getKeyStorageOrder())
             ).distinct().toArray();
         }
     }
@@ -548,7 +577,7 @@ public class LookupData implements Flushable {
     public Stream<LookupKey> keys() {
         LookupDataIterator<LookupKey> iter;
         try {
-            readLock.lock(); // Read lock the WriteCache while initializing the KeyIterator
+            consistentWriteCacheReadLock.lock(); // Read lock the WriteCache while initializing the KeyIterator
             Set<LookupKey> keySet = writeCacheKeySetCopy();
             iter = new LookupDataIterator<>(
                     getKeyPosition(),
@@ -560,7 +589,7 @@ public class LookupData implements Flushable {
                     }
             );
         } finally {
-            readLock.unlock();
+            consistentWriteCacheReadLock.unlock();
         }
         Spliterator<LookupKey> spliter = Spliterators.spliterator(
                 iter,
@@ -574,7 +603,7 @@ public class LookupData implements Flushable {
 
         LookupDataIterator<Map.Entry<LookupKey, Long>> iter;
         try {
-            readLock.lock(); // Read lock the WriteCache while initializing the KeyIterator
+            consistentWriteCacheReadLock.lock(); // Read lock the WriteCache while initializing the KeyIterator
             Map<LookupKey, Long> map = writeCacheCopy();
             iter = new LookupDataIterator<>(
                     getKeyPosition(),
@@ -583,7 +612,7 @@ public class LookupData implements Flushable {
                     this::readEntry
             );
         } finally {
-            readLock.unlock();
+            consistentWriteCacheReadLock.unlock();
         }
 
         Spliterator<Map.Entry<LookupKey, Long>> spliter = Spliterators.spliterator(
@@ -598,12 +627,12 @@ public class LookupData implements Flushable {
         final long[] positions;
         final Map<LookupKey, Long> writeCacheCopy;
         try {
-            readLock.lock(); // Read lock the WriteCache while initializing the data to scan
+            consistentWriteCacheReadLock.lock(); // Read lock the WriteCache while initializing the data to scan
             positions = getKeyPosition();
 
             writeCacheCopy = writeCacheCopy();
         } finally {
-            readLock.unlock();
+            consistentWriteCacheReadLock.unlock();
         }
 
         writeCacheCopy
