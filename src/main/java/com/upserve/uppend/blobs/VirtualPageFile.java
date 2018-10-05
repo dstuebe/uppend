@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 
 import java.io.*;
 import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Array;
 import java.nio.*;
 import java.nio.channels.FileChannel;
 import java.nio.file.*;
@@ -62,6 +63,8 @@ public class VirtualPageFile implements Closeable {
 
     private static final int MAX_BUFFERS = 1024 * 64; // 128 TB per partition.
     private final MappedByteBuffer[] mappedByteBuffers;
+    private final ThreadLocal<ByteBuffer>[] threadLocalByteBuffers;
+
     private final int bufferSize;
 
     private final Path filePath;
@@ -241,7 +244,7 @@ public class VirtualPageFile implements Closeable {
         final int mapPosition = (int) (postHeaderPosition % bufferSize);
         final int minimumCapacity = mapPosition + 8 + pageSize;
 
-        MappedByteBuffer bigbuffer = ensureBuffered(mapIndex, minimumCapacity);
+        ByteBuffer bigbuffer = ensureBuffered(mapIndex, minimumCapacity);
 
         return new MappedPage(bigbuffer, mapPosition + 8, pageSize);
     }
@@ -258,6 +261,7 @@ public class VirtualPageFile implements Closeable {
         }
     }
 
+    @SuppressWarnings("unchecked")
     public VirtualPageFile(Path filePath, int virtualFiles, int pageSize, int targetBufferSize, boolean readOnly) {
         this.filePath = filePath;
         this.readOnly = readOnly;
@@ -265,6 +269,8 @@ public class VirtualPageFile implements Closeable {
         this.pageSize = pageSize;
 
         this.mappedByteBuffers = new MappedByteBuffer[MAX_BUFFERS];
+
+        this.threadLocalByteBuffers = (ThreadLocal<ByteBuffer>[]) Array.newInstance(ThreadLocal.class, MAX_BUFFERS);
 
         if (targetBufferSize < (pageSize + 16)) throw new IllegalArgumentException("Target buffer size " + targetBufferSize + " must be larger than a page " + pageSize + " 16 bytes of overhead");
 
@@ -549,11 +555,12 @@ public class VirtualPageFile implements Closeable {
         final int mapPosition = (int) (postHeaderPosition % bufferSize);
         final int minimumCapacity = mapPosition + 8;
 
-        MappedByteBuffer bigbuffer = ensureBuffered(mapIndex, minimumCapacity);
+        ByteBuffer bigbuffer = ensureBuffered(mapIndex, minimumCapacity);
         return bigbuffer.getLong(mapPosition);
     }
 
-    private MappedByteBuffer ensureBuffered(int bufferIndex, int minimunmCapacity) {
+    private ByteBuffer ensureBuffered(int bufferIndex, int minimunmCapacity) {
+        // How to make this method return a thread local copy of the mapped byte buffer?
         MappedByteBuffer buffer = mappedByteBuffers[bufferIndex];
         if (buffer == null || buffer.capacity() < minimunmCapacity) {
             synchronized (mappedByteBuffers) {
@@ -561,15 +568,18 @@ public class VirtualPageFile implements Closeable {
                 if (buffer == null || buffer.capacity() < minimunmCapacity) {
                     long bufferStart = ((long) bufferIndex * bufferSize) + totalHeaderSize;
                     try {
-                        buffer = channel.map(mapMode, bufferStart, bufferSize(bufferStart, minimunmCapacity));
+                        final MappedByteBuffer newbuffer = channel.map(mapMode, bufferStart, bufferSize(bufferStart, minimunmCapacity));
+                        threadLocalByteBuffers[bufferIndex] = ThreadLocal.<ByteBuffer>withInitial(newbuffer::duplicate);
+                        mappedByteBuffers[bufferIndex] = buffer;
                     } catch (IOException e) {
                         throw new UncheckedIOException("Unable to map buffer for index " + bufferIndex + " at (" + bufferStart + " + " + minimunmCapacity + " minCapacity) in " + (readOnly ? "RO " : "RW") + " file "  + filePath + " with size +" + getFileSize(), e);
                     }
-                    mappedByteBuffers[bufferIndex] = buffer;
+
                 }
             }
         }
-        return buffer;
+
+        return threadLocalByteBuffers[bufferIndex].get();
     }
 
     private void preloadBuffers(){
@@ -587,8 +597,9 @@ public class VirtualPageFile implements Closeable {
             }
 
             try {
-                MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, bufferStart, bSize);
+                final MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, bufferStart, bSize);
                 mappedByteBuffers[bufferIndex] = buffer;
+                threadLocalByteBuffers[bufferIndex] = ThreadLocal.<ByteBuffer>withInitial(buffer::duplicate);
             } catch (IOException e) {
                 throw new UncheckedIOException("Unable to preload mapped buffer for index " + bufferIndex + " at (" + bufferStart + " + " + bSize + " minCapacity) in " + (readOnly ? "RO " : "RW") + " file "  + filePath + " with size +" + getFileSize(), e);
             }
