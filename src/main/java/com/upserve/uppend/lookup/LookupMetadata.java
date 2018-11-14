@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.LongAdder;
 public class LookupMetadata {
     private static final Logger log = org.slf4j.LoggerFactory.getLogger(MethodHandles.lookup().lookupClass());
 
-    private static final int MAX_BISECT_KEY_CACHE_DEPTH = 9;
+    private static final int MAX_BISECT_KEY_CACHE_DEPTH = 11;
 
     private final int metadataGeneration;
 

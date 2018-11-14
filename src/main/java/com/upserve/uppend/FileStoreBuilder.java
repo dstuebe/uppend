@@ -203,8 +203,8 @@ public class FileStoreBuilder<T extends FileStoreBuilder<T>> {
 
     public LookupCache buildLookupCache(String metricsPrefix, boolean readOnly) {
         return new LookupCache(
-                getInitialLookupKeyCacheSize(),
-                getMaximumLookupKeyCacheWeight(),
+                0,
+                0,
                 getLookupKeyCacheExecutorService(),
                 metricsSupplier(metricsPrefix, LOOKUP_KEY_CACHE_METRICS)
         );
